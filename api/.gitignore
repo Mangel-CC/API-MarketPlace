@@ -1,0 +1,11 @@
+# Variables de entorno
+.env
+
+# Dependencias PHP
+/vendor/
+
+Backup.sql
+
+# Logs y cache de Apache
+*.log
+/logs/

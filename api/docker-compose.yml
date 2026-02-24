@@ -1,0 +1,33 @@
+services:
+
+  api:
+    build: .
+    container_name: market_api
+    environment:
+      IMAGEKIT_PUBLIC: ${IMAGEKIT_PUBLIC}
+      IMAGEKIT_PRIVATE: ${IMAGEKIT_PRIVATE}
+      IMAGEKIT_URL: ${IMAGEKIT_URL}
+    ports:
+      - "8000:80"
+    volumes:
+      - .:/var/www/html
+    depends_on:
+      - db
+    restart: always
+
+  db:
+    image: mysql:8.0
+    container_name: market_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: always
+
+volumes:
+  mysql_data:
