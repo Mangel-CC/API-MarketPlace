@@ -1,0 +1,14 @@
+# Variables de entorno
+.env
+
+# Configuración del editor
+.idea
+
+# Dependencias PHP
+/vendor/
+
+Backup.sql
+
+# Logs y cache de Apache
+*.log
+/logs/
