@@ -13,8 +13,6 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
       - "8001:80"
-    volumes:
-      - .:/var/www/html
     depends_on:
       - db
     restart: always
@@ -29,8 +27,6 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD}
     ports:
       - "3307:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
     restart: always
 
 volumes:
