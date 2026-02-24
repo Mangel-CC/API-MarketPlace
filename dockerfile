@@ -10,7 +10,7 @@ WORKDIR /var/www/html
 
 COPY . /var/www/html
 
-RUN composer install --no-dev --optimize-autoloader
+RUN composer install --no-dev --optimize-autoloader --ignore-platform-reqs --no-scripts
 
 COPY apache.conf /etc/apache2/sites-available/000-default.conf
 
