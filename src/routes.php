@@ -525,7 +525,7 @@ $app->get('/my-products', function (Request $request, Response $response, array 
 
     try {
         $stmt = $pdo->prepare('
-            SELECT p.id, p.nombre, p.precio, p.imagen
+            SELECT p.id, p.nombre, p.descripcion, p.precio, p.imagen, p.cantidad, p.id_categoria
             FROM productos p
             INNER JOIN registro_usr r ON p.id_vendedor = r.id
             WHERE r.id = ? AND p.activo = 1
@@ -573,6 +573,74 @@ $app->post('/my-products/delete', function (Request $request, Response $response
     }
 })->add($authMiddleware);
 
+/*
+|--------------------------------------------------------------------------
+| Update product
+|--------------------------------------------------------------------------
+*/
+$app->post('/my-products/update', function (Request $request, Response $response, array $args) use ($pdo) {
+    $user_id = $request->getAttribute('usuario_id');
+    $data = json_decode($request->getBody()->getContents(), true);
+
+    if (empty($data['product_id']) || empty($data['nombre']) || empty($data['descripcion']) ||
+        !isset($data['precio']) || !isset($data['cantidad']) || empty($data['id_categoria'])) {
+        return jsonResponse($response, [
+            "success" => false,
+            "message" => "Faltan campos requeridos"
+        ], 400);
+    }
+
+    if (!is_numeric($data['precio']) || !is_numeric($data['cantidad'])) {
+        return jsonResponse($response, [
+            "success" => false,
+            "error" => "Invalid numeric values"
+        ], 400);
+    }
+
+    if ((float)$data['precio'] <= 0 || (int)$data['cantidad'] < 1) {
+        return jsonResponse($response, [
+            "success" => false,
+            "error" => "El precio debe ser mayor a 0 y la cantidad al menos 1"
+        ], 400);
+    }
+
+    try {
+        // Verificar que el producto pertenece al usuario
+        $stmt = $pdo->prepare("SELECT id FROM productos WHERE id = ? AND id_vendedor = ?");
+        $stmt->execute([$data['product_id'], $user_id]);
+        if (!$stmt->fetch()) {
+            return jsonResponse($response, [
+                "success" => false,
+                "message" => "Producto no encontrado o no autorizado"
+            ], 403);
+        }
+
+        $stmt = $pdo->prepare("
+            UPDATE productos
+            SET nombre = ?, descripcion = ?, precio = ?, cantidad = ?, id_categoria = ?
+            WHERE id = ? AND id_vendedor = ?
+        ");
+        $stmt->execute([
+            $data['nombre'],
+            $data['descripcion'],
+            $data['precio'],
+            $data['cantidad'],
+            $data['id_categoria'],
+            $data['product_id'],
+            $user_id
+        ]);
+
+        return jsonResponse($response, [
+            "success" => true,
+            "message" => "Producto actualizado correctamente"
+        ]);
+    } catch (PDOException $e) {
+        return jsonResponse($response, [
+            "success" => false,
+            "message" => "Error al actualizar: " . $e->getMessage()
+        ], 500);
+    }
+})->add($authMiddleware);
 
 /*
 |--------------------------------------------------------------------------
@@ -868,10 +936,17 @@ $app->post('/products/upload', function (Request $request, Response $response) u
     }
 
     if (!is_numeric($data['precio']) || !is_numeric($data['cantidad'])) {
-    return jsonResponse($response, [
-        "success" => false,
-        "error" => "Invalid numeric values"
-    ], 400);
+        return jsonResponse($response, [
+            "success" => false,
+            "error" => "Invalid numeric values"
+        ], 400);
+    }
+
+    if ((float)$data['precio'] <= 0 || (int)$data['cantidad'] < 1) {
+        return jsonResponse($response, [
+            "success" => false,
+            "error" => "El precio debe ser mayor a 0 y la cantidad al menos 1"
+        ], 400);
     }
 
     // Insertar datos del producto en la base de datos
