@@ -224,25 +224,47 @@ $app->post('/profile/update', function (Request $request, Response $response, ar
         return $response->withStatus(400);
     }
 
-    $nombre = $data['nombre'];
-    $apellidos = $data['apellidos'];
-    $email = $data['email'];
+    $nombre = trim($data['nombre']);
+    $apellidos = trim($data['apellidos']);
+    $email = trim($data['email']);
     $password = $data['password'];
 
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $response->getBody()->write(json_encode([
+            "success" => false,
+            "message" => "Email no válido"
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
     try {
-        $stmt = $pdo->prepare("UPDATE registro_usr SET nombre = ?, apellidos = ?, email = ?, password = ? WHERE id = ?");
-        $stmt->execute([$nombre, $apellidos, $email, $password, $user_id]);
+        // Verificar que la contraseña actual es correcta antes de actualizar
+        $stmt = $pdo->prepare("SELECT password FROM registro_usr WHERE id = ?");
+        $stmt->execute([$user_id]);
+        $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$currentUser || !password_verify($password, $currentUser['password'])) {
+            $response->getBody()->write(json_encode([
+                "success" => false,
+                "message" => "Contraseña incorrecta"
+            ]));
+            return $response->withStatus(401)->withHeader('Content-Type', 'application/json');
+        }
+
+        $stmt = $pdo->prepare("UPDATE registro_usr SET nombre = ?, apellidos = ?, email = ? WHERE id = ?");
+        $stmt->execute([$nombre, $apellidos, $email, $user_id]);
         $response->getBody()->write(json_encode([
             "success" => true,
             "message" => "Perfil actualizado correctamente"
         ]));
         return $response->withStatus(200);
     } catch (PDOException $e) {
+        error_log("Error al actualizar perfil: " . $e->getMessage());
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error al actualizar el perfil: " . $e->getMessage()
+            "message" => "Error al actualizar el perfil"
         ]));
-        return $response->withStatus(500);
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -336,7 +358,7 @@ $app->post('/validate-token', function (Request $request, Response $response) us
 |--------------------------------------------------------------------------
 */
 $app->get('/product/{id}', function (Request $request, Response $response, array $args) use ($pdo) {
-    $id = $args['id'];
+    $id = (int) $args['id'];
 
     // Consulta con JOIN para obtener datos del vendedor
     $sql = "
@@ -367,8 +389,9 @@ $app->get('/product/{id}', function (Request $request, Response $response, array
             return $response->withStatus(404);
         }
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["error" => $e->getMessage()]));
-        return $response->withStatus(500);
+        error_log("Error GET /product/{id}: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["error" => "Error interno"]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -408,7 +431,8 @@ $app->get('/productos', function (Request $request, Response $response) use ($pd
 
         $response->getBody()->write(json_encode($productos));
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["error" => $e->getMessage()]));
+        error_log("Error GET /productos: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["error" => "Error interno"]));
     }
 
     return $response->withHeader('Content-Type', 'application/json');
@@ -427,7 +451,8 @@ $app->get('/categorias', function (Request $request, Response $response) use ($p
         // Enviar directamente la lista, sin envolverla en un objeto JSON
         $response->getBody()->write(json_encode($categorias));
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["error" => $e->getMessage()]));
+        error_log("Error GET /categorias: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["error" => "Error interno"]));
     }
 
     return $response->withHeader('Content-Type', 'application/json');
@@ -535,8 +560,9 @@ $app->get('/my-products', function (Request $request, Response $response, array 
         $response->getBody()->write(json_encode($products));
         return $response->withStatus(200);
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["error" => "Error al obtener productos: " . $e->getMessage()]));
-        return $response->withStatus(500);
+        error_log("Error GET /my-products: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["error" => "Error al obtener productos"]));
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -546,30 +572,44 @@ $app->get('/my-products', function (Request $request, Response $response, array 
 |--------------------------------------------------------------------------
 */
 $app->post('/my-products/delete', function (Request $request, Response $response, array $args) use ($pdo) {
+    $user_id = $request->getAttribute('usuario_id');
     $data = json_decode($request->getBody()->getContents(), true);
+
     if (empty($data['product_id'])) {
         $response->getBody()->write(json_encode([
             "success" => false,
             "message" => "Se requiere el product_id"
         ]));
-        return $response->withStatus(400);
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
     }
-    $productId = $data['product_id'];
+    $productId = (int) $data['product_id'];
 
     try {
-        $stmt = $pdo->prepare("DELETE FROM productos WHERE id = ?");
-        $stmt->execute([$productId]);
+        // Verificar que el producto pertenece al usuario autenticado
+        $stmt = $pdo->prepare("SELECT id FROM productos WHERE id = ? AND id_vendedor = ?");
+        $stmt->execute([$productId, $user_id]);
+        if (!$stmt->fetch()) {
+            $response->getBody()->write(json_encode([
+                "success" => false,
+                "message" => "Producto no encontrado o no autorizado"
+            ]));
+            return $response->withStatus(403)->withHeader('Content-Type', 'application/json');
+        }
+
+        $stmt = $pdo->prepare("DELETE FROM productos WHERE id = ? AND id_vendedor = ?");
+        $stmt->execute([$productId, $user_id]);
         $response->getBody()->write(json_encode([
             "success" => true,
             "message" => "Producto eliminado correctamente"
         ]));
-        return $response->withStatus(200);
+        return $response->withStatus(200)->withHeader('Content-Type', 'application/json');
     } catch (PDOException $e) {
+        error_log("Error al eliminar producto: " . $e->getMessage());
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error al eliminar el producto: " . $e->getMessage()
+            "message" => "Error al eliminar el producto"
         ]));
-        return $response->withStatus(500);
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -635,9 +675,10 @@ $app->post('/my-products/update', function (Request $request, Response $response
             "message" => "Producto actualizado correctamente"
         ]);
     } catch (PDOException $e) {
+        error_log("Error POST /my-products/update: " . $e->getMessage());
         return jsonResponse($response, [
             "success" => false,
-            "message" => "Error al actualizar: " . $e->getMessage()
+            "message" => "Error al actualizar el producto"
         ], 500);
     }
 })->add($authMiddleware);
@@ -657,8 +698,17 @@ $app->post('/register', function (Request $request, Response $response) use ($pd
 
 
         if (empty($nombre) || empty($apellido) || empty($email) || empty($password)) {
-            error_log("Falta información en el registro.");
             $response->getBody()->write(json_encode(["success" => false, "message" => "Todos los campos son obligatorios."]));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
+        }
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $response->getBody()->write(json_encode(["success" => false, "message" => "Email no válido."]));
+            return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
+        }
+
+        if (strlen($password) < 6) {
+            $response->getBody()->write(json_encode(["success" => false, "message" => "La contraseña debe tener al menos 6 caracteres."]));
             return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
         }
 
@@ -706,11 +756,11 @@ $app->post('/register', function (Request $request, Response $response) use ($pd
 |--------------------------------------------------------------------------
 */
 $app->post('/reviews', function (Request $request, Response $response, array $args) use ($pdo) {
+    $user_id = $request->getAttribute('usuario_id');
     $data = json_decode($request->getBody()->getContents(), true);
+
     if (
         empty($data['producto_id']) ||
-        empty($data['autor_id']) ||
-        empty($data['vendedor_id']) ||
         !isset($data['comentario']) ||
         !isset($data['calificacion'])
     ) {
@@ -718,12 +768,23 @@ $app->post('/reviews', function (Request $request, Response $response, array $ar
             "success" => false,
             "message" => "Faltan datos requeridos"
         ]));
-        return $response->withStatus(400);
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
     }
-    $producto_id = $data['producto_id'];
-    $autor_id = $data['autor_id'];
-    $comentario = $data['comentario'];
-    $calificacion = $data['calificacion'];
+
+    $producto_id = (int) $data['producto_id'];
+    $autor_id = $user_id; // Usar el ID del token, no del body
+    $comentario = trim($data['comentario']);
+    $calificacion = (int) $data['calificacion'];
+
+    // Validar rango de calificación
+    if ($calificacion < 1 || $calificacion > 5) {
+        $response->getBody()->write(json_encode([
+            "success" => false,
+            "message" => "La calificación debe ser entre 1 y 5"
+        ]));
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
+    }
+
     try {
         $stmt = $pdo->prepare("
             INSERT INTO reseñas (producto_id, autor_id, comentario, calificacion)
@@ -735,15 +796,16 @@ $app->post('/reviews', function (Request $request, Response $response, array $ar
             "success" => true,
             "message" => "Reseña registrada exitosamente"
         ]));
-        return $response->withStatus(201);
+        return $response->withStatus(201)->withHeader('Content-Type', 'application/json');
     } catch (PDOException $e) {
+        error_log("Error al registrar reseña: " . $e->getMessage());
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error al registrar la reseña: " . $e->getMessage()
+            "message" => "Error al registrar la reseña"
         ]));
-        return $response->withStatus(500);
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
-});
+})->add($authMiddleware);
 
 /*
 |--------------------------------------------------------------------------
@@ -805,10 +867,11 @@ $app->get('/review-products', function (Request $request, Response $response, ar
         $response->getBody()->write(json_encode($products));
         return $response->withStatus(200);
     } catch (PDOException $e) {
+        error_log("Error GET /review-products: " . $e->getMessage());
         $response->getBody()->write(json_encode([
-            "error" => "Error al obtener productos: " . $e->getMessage()
+            "error" => "Error al obtener productos"
         ]));
-        return $response->withStatus(500);
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -851,7 +914,8 @@ $app->post('/favorites/add', function (Request $request, Response $response) use
             return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
         }
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["success" => false, "error" => "Error en el servidor: " . $e->getMessage()]));
+        error_log("Error POST /favorites/add: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["success" => false, "error" => "Error en el servidor"]));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
     }
 })->add($authMiddleware);
@@ -929,9 +993,10 @@ $app->post('/products/upload', function (Request $request, Response $response) u
         $imageUrl = $upload->result->url;
 
     } catch (Exception $e) {
+        error_log("Error upload ImageKit: " . $e->getMessage());
         return jsonResponse($response, [
             "success" => false,
-            "error" => $e->getMessage()
+            "error" => "Error al subir la imagen"
         ], 500);
     }
 
@@ -996,7 +1061,8 @@ $app->get('/favorites', function (Request $request, Response $response, array $a
         $response->getBody()->write(json_encode($favorites));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
     } catch (PDOException $e) {
-        $response->getBody()->write(json_encode(["error" => "Error: " . $e->getMessage()]));
+        error_log("Error GET /favorites: " . $e->getMessage());
+        $response->getBody()->write(json_encode(["error" => "Error interno"]));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
     }
 })->add($authMiddleware);
@@ -1032,7 +1098,8 @@ $app->group('/chat', function (RouteCollectorProxy $group) use ($pdo) {
             $response->getBody()->write($payload);
             return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
         } catch (PDOException $e) {
-            $payload = json_encode(["success" => false, "error" => "Error en el servidor: " . $e->getMessage()]);
+            error_log("Error GET /chat/{id}/messages: " . $e->getMessage());
+            $payload = json_encode(["success" => false, "error" => "Error en el servidor"]);
             $response->getBody()->write($payload);
             return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
         }
@@ -1083,7 +1150,8 @@ $app->group('/chat', function (RouteCollectorProxy $group) use ($pdo) {
                 return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
             }
         } catch (PDOException $e) {
-            $payload = json_encode(["success" => false, "error" => "Error en el servidor: " . $e->getMessage()]);
+            error_log("Error POST /chat/{id}/newMessage: " . $e->getMessage());
+            $payload = json_encode(["success" => false, "error" => "Error en el servidor"]);
             $response->getBody()->write($payload);
             return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
         }
@@ -1097,16 +1165,12 @@ $app->group('/chat', function (RouteCollectorProxy $group) use ($pdo) {
 |--------------------------------------------------------------------------
 */
 $app->post('/chat/start', function (Request $request, Response $response) use ($pdo) {
+    $user_id = $request->getAttribute('usuario_id'); // Usar ID del token
     $input = json_decode($request->getBody()->getContents(), true);
-    $user_id = isset($input['user_id']) ? (string) $input['user_id'] : null;
-    $product_id = isset($input['product_id']) ? (string) $input['product_id'] : null;
-    if ($input === null) {
-        return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-    }
+    $product_id = isset($input['product_id']) ? (int) $input['product_id'] : null;
 
-    if (!$user_id || !$product_id) {
-        error_log("⚠️ Error: Faltan datos");
-        $response->getBody()->write(json_encode(["error" => "Faltan datos"]));
+    if (!$product_id) {
+        $response->getBody()->write(json_encode(["error" => "product_id es requerido"]));
         return $response->withHeader('Content-Type', 'application/json')
             ->withStatus(400);
     }
@@ -1168,11 +1232,11 @@ $app->post('/chat/start', function (Request $request, Response $response) use ($
         }
     } catch (PDOException $e) {
         error_log("Error en el servidor: " . $e->getMessage());
-        $response->getBody()->write(json_encode(["error" => "Error en el servidor: " . $e->getMessage()]));
+        $response->getBody()->write(json_encode(["error" => "Error en el servidor"]));
         return $response->withHeader('Content-Type', 'application/json')
             ->withStatus(500);
     }
-});
+})->add($authMiddleware);
 
 /*
 |--------------------------------------------------------------------------
@@ -1209,7 +1273,8 @@ $app->get('/chat/list', function (Request $request, Response $response, array $a
         $response->getBody()->write(json_encode($chats));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
     } catch (PDOException $e) {
-        $error = ["error" => "Error al obtener chats: " . $e->getMessage()];
+        error_log("Error GET /chat/list: " . $e->getMessage());
+        $error = ["error" => "Error al obtener chats"];
         $response->getBody()->write(json_encode($error));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
     }
@@ -1231,7 +1296,8 @@ $app->get('/notifications/count', function (Request $request, Response $response
         $response->getBody()->write(json_encode($data));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(200);
     } catch (PDOException $e) {
-        $data = ["error" => "Error al obtener notificaciones: " . $e->getMessage()];
+        error_log("Error GET /notifications/count: " . $e->getMessage());
+        $data = ["error" => "Error al obtener notificaciones"];
         $response->getBody()->write(json_encode($data));
         return $response->withHeader('Content-Type', 'application/json')->withStatus(500);
     }
@@ -1252,10 +1318,11 @@ $app->get('/notifications', function (Request $request, Response $response, arra
         $response->getBody()->write(json_encode($notifications));
         return $response->withStatus(200);
     } catch (PDOException $e) {
+        error_log("Error GET /notifications: " . $e->getMessage());
         $response->getBody()->write(json_encode([
-            "error" => "Error: " . $e->getMessage()
+            "error" => "Error interno"
         ]));
-        return $response->withStatus(500);
+        return $response->withStatus(500)->withHeader('Content-Type', 'application/json');
     }
 })->add($authMiddleware);
 
@@ -1278,7 +1345,7 @@ $app->post('/notifications/mark-read', function (Request $request, Response $res
     } catch (PDOException $e) {
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error: " . $e->getMessage()
+            "message" => "Error interno"
         ]));
         return $response->withStatus(500);
     }
@@ -1303,7 +1370,7 @@ $app->post('/notifications/delete-all', function (Request $request, Response $re
     } catch (PDOException $e) {
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error: " . $e->getMessage()
+            "message" => "Error interno"
         ]));
         return $response->withStatus(500);
     }
@@ -1315,6 +1382,7 @@ $app->post('/notifications/delete-all', function (Request $request, Response $re
 |--------------------------------------------------------------------------
 */
 $app->post('/notifications/delete', function (Request $request, Response $response, array $args) use ($pdo) {
+    $user_id = $request->getAttribute('usuario_id');
     $data = json_decode($request->getBody()->getContents(), true);
 
     if (empty($data['id'])) {
@@ -1322,14 +1390,15 @@ $app->post('/notifications/delete', function (Request $request, Response $respon
             "success" => false,
             "message" => "Se requiere el id de la notificación"
         ]));
-        return $response->withStatus(400);
+        return $response->withStatus(400)->withHeader('Content-Type', 'application/json');
     }
 
-    $id = $data['id'];
+    $id = (int) $data['id'];
 
     try {
-        $stmt = $pdo->prepare("DELETE FROM notificaciones WHERE id = ?");
-        $stmt->execute([$id]);
+        // Solo eliminar si la notificación pertenece al usuario autenticado
+        $stmt = $pdo->prepare("DELETE FROM notificaciones WHERE id = ? AND usuario_id = ?");
+        $stmt->execute([$id, $user_id]);
         $response->getBody()->write(json_encode([
             "success" => true,
             "message" => "Notificación eliminada"
@@ -1338,7 +1407,7 @@ $app->post('/notifications/delete', function (Request $request, Response $respon
     } catch (PDOException $e) {
         $response->getBody()->write(json_encode([
             "success" => false,
-            "message" => "Error: " . $e->getMessage()
+            "message" => "Error interno"
         ]));
         return $response->withStatus(500);
     }
@@ -1352,12 +1421,7 @@ $app->post('/notifications/delete', function (Request $request, Response $respon
 */
 $app->get('/cart', function (Request $request, Response $response) use ($pdo) {
     try {
-        $usuario_id = $request->getQueryParams()['usuario_id'] ?? null;
-
-        if (!$usuario_id) {
-            $response->getBody()->write(json_encode(["error" => "usuario_id requerido"]));
-            return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-        }
+        $usuario_id = $request->getAttribute('usuario_id');
 
         // Obtener o crear carrito
         $stmt = $pdo->prepare("SELECT id FROM carrito WHERE usuario_id = :usuario_id");
@@ -1409,13 +1473,13 @@ $app->get('/cart', function (Request $request, Response $response) use ($pdo) {
 */
 $app->post('/cart/add', function (Request $request, Response $response) use ($pdo) {
     try {
+        $usuario_id = $request->getAttribute('usuario_id');
         $input = json_decode($request->getBody()->getContents(), true);
-        $usuario_id = $input['usuario_id'] ?? null;
-        $producto_id = $input['producto_id'] ?? null;
-        $cantidad = $input['cantidad'] ?? 1;
+        $producto_id = isset($input['producto_id']) ? (int) $input['producto_id'] : null;
+        $cantidad = isset($input['cantidad']) ? (int) $input['cantidad'] : 1;
 
-        if (!$usuario_id || !$producto_id) {
-            $response->getBody()->write(json_encode(["error" => "usuario_id y producto_id son requeridos"]));
+        if (!$producto_id || $cantidad < 1) {
+            $response->getBody()->write(json_encode(["error" => "producto_id y cantidad válida son requeridos"]));
             return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
         }
 
@@ -1478,12 +1542,12 @@ $app->post('/cart/add', function (Request $request, Response $response) use ($pd
 */
 $app->delete('/cart/remove', function (Request $request, Response $response) use ($pdo) {
     try {
+        $usuario_id = $request->getAttribute('usuario_id');
         $input = json_decode($request->getBody()->getContents(), true);
-        $item_id = $input['item_id'] ?? null;
-        $usuario_id = $input['usuario_id'] ?? null;
+        $item_id = isset($input['item_id']) ? (int) $input['item_id'] : null;
 
-        if (!$item_id || !$usuario_id) {
-            $response->getBody()->write(json_encode(["error" => "item_id y usuario_id son requeridos"]));
+        if (!$item_id) {
+            $response->getBody()->write(json_encode(["error" => "item_id es requerido"]));
             return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
         }
 
@@ -1520,13 +1584,7 @@ $app->delete('/cart/remove', function (Request $request, Response $response) use
 */
 $app->post('/cart/clear', function (Request $request, Response $response) use ($pdo) {
     try {
-        $input = json_decode($request->getBody()->getContents(), true);
-        $usuario_id = $input['usuario_id'] ?? null;
-
-        if (!$usuario_id) {
-            $response->getBody()->write(json_encode(["error" => "usuario_id requerido"]));
-            return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
-        }
+        $usuario_id = $request->getAttribute('usuario_id');
 
         $stmt = $pdo->prepare("
             DELETE ci FROM carrito_items ci
@@ -1552,12 +1610,12 @@ $app->post('/cart/clear', function (Request $request, Response $response) use ($
 */
 $app->post('/favorites/toggle', function (Request $request, Response $response) use ($pdo) {
     try {
+        $usuario_id = $request->getAttribute('usuario_id');
         $input = json_decode($request->getBody()->getContents(), true);
-        $usuario_id = $input['usuario_id'] ?? null;
-        $producto_id = $input['producto_id'] ?? null;
+        $producto_id = isset($input['producto_id']) ? (int) $input['producto_id'] : null;
 
-        if (!$usuario_id || !$producto_id) {
-            $response->getBody()->write(json_encode(["error" => "usuario_id y producto_id son requeridos"]));
+        if (!$producto_id) {
+            $response->getBody()->write(json_encode(["error" => "producto_id es requerido"]));
             return $response->withHeader('Content-Type', 'application/json')->withStatus(400);
         }
 
