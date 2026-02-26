@@ -817,10 +817,11 @@ $app->get('/product/{id}/reviews', function (Request $request, Response $respons
 
     try {
         $stmt = $pdo->prepare("
-            SELECT r.comentario, r.calificacion, u.nombre AS autor
+            SELECT r.comentario, r.calificacion, r.fecha, u.nombre AS autor
             FROM `reseñas` r
             JOIN `registro_usr` u ON r.autor_id = u.id
             WHERE r.producto_id = :product_id
+            ORDER BY r.fecha DESC
         ");
         $stmt->bindParam(':product_id', $product_id, PDO::PARAM_INT);
         $stmt->execute();
